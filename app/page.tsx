@@ -555,9 +555,9 @@ export default function Home() {
   }, [empresaSupabaseId]);
 
   useEffect(() => {
-    if (!sesionActiva || !supabaseConectado) return;
+    if (!sesionActiva || !supabaseConectado || !authUserId) return;
     cargarEmpresasDisponibles();
-  }, [sesionActiva, supabaseConectado]);
+  }, [sesionActiva, supabaseConectado, authUserId]);
 
   useEffect(() => {
     if (!empresaSupabaseId) {
@@ -3225,28 +3225,86 @@ export default function Home() {
   }
 
   async function cargarEmpresasDisponibles() {
+    if (!authUserId) {
+      setEmpresasDisponibles([]);
+      setMensajeSupabase("Esperando usuario autenticado.");
+      return;
+    }
+
     try {
       setCargandoEmpresas(true);
 
-      const { data, error } = await supabase
-        .from("empresas")
-        .select("id,nombre,giro,sitio,responsable,objetivo,created_at")
-        .order("created_at", { ascending: false });
+      const { data: relaciones, error: relacionesError } = await supabase
+        .from("empresa_usuarios")
+        .select(`
+          empresa_id,
+          empresas (
+            id,
+            nombre,
+            giro,
+            sitio,
+            responsable,
+            objetivo,
+            created_at
+          )
+        `)
+        .eq("user_id", authUserId)
+        .eq("estado", "Activo");
 
-      if (error) throw error;
+      if (relacionesError) throw relacionesError;
 
-      const empresasDB: EmpresaWorkspace[] = (data || []).map((item) => ({
-        id: item.id,
-        nombre: item.nombre || "Empresa sin nombre",
-        giro: item.giro || "",
-        sitio: item.sitio || "",
-        responsable: item.responsable || "",
-        objetivo: item.objetivo || "",
-        created_at: item.created_at || "",
-      }));
+      const empresasDB: EmpresaWorkspace[] = (relaciones || [])
+        .map((item: any) => item.empresas)
+        .filter(Boolean)
+        .map((item: any) => ({
+          id: item.id,
+          nombre: item.nombre || "Empresa sin nombre",
+          giro: item.giro || "",
+          sitio: item.sitio || "",
+          responsable: item.responsable || "",
+          objetivo: item.objetivo || "",
+          created_at: item.created_at || "",
+        }))
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
 
       setEmpresasDisponibles(empresasDB);
-      setMensajeSupabase(`${empresasDB.length} workspace(s) cargados desde Supabase.`);
+
+      if (empresasDB.length === 0) {
+        setEmpresaSupabaseId(null);
+        setEmpresa({
+          nombre: "",
+          giro: "",
+          sitio: "",
+          whatsapp: "",
+          instagram: "",
+          facebook: "",
+          tamano: "",
+          objetivo: "",
+          responsable: usuario.nombre || "",
+        });
+        setLeads([]);
+        setAccionesEjecutivas([]);
+        setEjecutivos([]);
+        setMensajeSupabase("Este usuario aún no tiene empresas asignadas.");
+        return;
+      }
+
+      const empresaActual =
+        empresasDB.find((item) => item.id === empresaSupabaseId) || empresasDB[0];
+
+      setEmpresaSupabaseId(empresaActual.id);
+      setEmpresa((actual) => ({
+        ...actual,
+        nombre: empresaActual.nombre || "",
+        giro: empresaActual.giro || "",
+        sitio: empresaActual.sitio || "",
+        responsable: empresaActual.responsable || usuario.nombre || "",
+        objetivo: empresaActual.objetivo || "",
+      }));
+
+      await cargarDatosSupabase(empresaActual.id);
+
+      setMensajeSupabase(`${empresasDB.length} workspace(s) cargados para este usuario.`);
     } catch (error) {
       console.error("BNS Supabase empresas load error:", error);
       setMensajeSupabase("No se pudieron cargar empresas desde Supabase.");
